@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+Package.resolved
+
+# Local-only: planning / brainstorm / Claude artifacts — not part of the project
+IDEAS.md
+CLAUDE.md
+.claude/
