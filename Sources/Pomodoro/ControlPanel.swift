@@ -1,12 +1,12 @@
 import AppKit
 import SwiftUI
 
-/// Owns the small floating window with the clock and timer controls.
-/// Minimizes to the Dock; closing it quits the app.
 @MainActor
 final class ControlPanelController: NSObject, NSWindowDelegate {
   private var window: NSWindow?
+  private var clickMonitor: Any?
   private let engine: TimerEngine
+  private let focus = FocusController()
 
   init(engine: TimerEngine) {
     self.engine = engine
@@ -28,7 +28,7 @@ final class ControlPanelController: NSObject, NSWindowDelegate {
     window.isMovableByWindowBackground = true
     window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     window.delegate = self
-    window.contentView = NSHostingView(rootView: ControlPanelView(engine: engine))
+    window.contentView = NSHostingView(rootView: ControlPanelView(engine: engine, focus: focus))
 
     if let screen = NSScreen.main {
       let frame = screen.visibleFrame
@@ -36,33 +36,56 @@ final class ControlPanelController: NSObject, NSWindowDelegate {
     }
 
     window.makeKeyAndOrderFront(nil)
+    window.initialFirstResponder = window.contentView
     self.window = window
+
+    clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+      if event.window == self?.window {
+        DispatchQueue.main.async { self?.focus.clear() }
+      }
+      return event
+    }
   }
 
-  /// Red close button quits the whole app rather than just hiding the window.
   func windowShouldClose(_ sender: NSWindow) -> Bool {
     NSApp.terminate(nil)
     return false
   }
 }
 
+@MainActor
+@Observable
+private final class FocusController {
+  var clearToken = 0
+  func clear() { clearToken += 1 }
+}
+
+private enum FocusField: Hashable {
+  case duration(Int)
+  case start
+  case reset
+}
+
 private struct ControlPanelView: View {
   let engine: TimerEngine
+  let focus: FocusController
+  @FocusState private var field: FocusField?
 
   var body: some View {
     VStack(spacing: 12) {
       ClockLabel(engine: engine)
-      DurationPicker(engine: engine)
-      Controls(engine: engine)
+      DurationPicker(engine: engine, field: $field)
+      Controls(engine: engine, field: $field)
     }
     .padding(16)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .onChange(of: focus.clearToken) { field = nil }
   }
 }
 
-/// Preset session lengths. Re-renders only when `totalDuration` changes.
 private struct DurationPicker: View {
   let engine: TimerEngine
+  @FocusState.Binding var field: FocusField?
 
   private let presets: [Int] = [15, 25, 45]
 
@@ -75,13 +98,13 @@ private struct DurationPicker: View {
         }
         .buttonStyle(.bordered)
         .tint(isSelected ? .orange : .gray)
+        .focused($field, equals: .duration(minutes))
       }
     }
     .controlSize(.small)
   }
 }
 
-/// Re-renders every tick (reads `clockString`); kept separate so the controls don't.
 private struct ClockLabel: View {
   let engine: TimerEngine
 
@@ -93,23 +116,23 @@ private struct ClockLabel: View {
   }
 }
 
-/// Only re-renders when `isRunning` flips, so the buttons stay stable while time runs.
 private struct Controls: View {
   let engine: TimerEngine
+  @FocusState.Binding var field: FocusField?
 
   var body: some View {
     HStack(spacing: 10) {
       Button(engine.isRunning ? "Pause" : "Start") {
         engine.toggle()
       }
-      .keyboardShortcut(.space, modifiers: [])
+      .focused($field, equals: .start)
 
       Button("Reset") {
         engine.reset()
       }
+      .focused($field, equals: .reset)
     }
     .controlSize(.large)
     .buttonStyle(.borderedProminent)
-    .focusEffectDisabled()
   }
 }
